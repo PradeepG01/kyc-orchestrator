@@ -1,0 +1,111 @@
+openapi: 3.0.3
+info:
+  title: KYC Orchestrator API
+  version: 1.0.0
+  description: Verify customers against identity, sanctions/PEP and address vendors through one API.
+servers:
+  - url: http://localhost:3000
+security:
+  - bearerAuth: []
+paths:
+  /v1/verifications:
+    post:
+      summary: Run a new verification
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: {type: string, maxLength: 100}
+          description: Retrying with the same key returns the original result instead of creating a duplicate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateVerification'}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Verification'}}}}
+        '200': {description: Idempotent replay of an earlier request}
+        '400': {description: Validation error}
+        '401': {description: Missing or invalid API key}
+        '422': {description: Idempotency-Key reused with a different body}
+    get:
+      summary: List verifications (newest first)
+      parameters:
+        - {in: query, name: status, schema: {type: string, enum: [approved, rejected, review]}}
+        - {in: query, name: limit, schema: {type: integer, maximum: 200}}
+      responses:
+        '200': {description: OK}
+  /v1/verifications/{id}:
+    get:
+      summary: Get one verification
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Verification'}}}}
+        '404': {description: Not found}
+  /v1/verifications/{id}/review:
+    post:
+      summary: Record an analyst decision for a case in manual review
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, reviewer]
+              properties:
+                decision: {type: string, enum: [approved, rejected]}
+                reviewer: {type: string}
+                note: {type: string}
+      responses:
+        '200': {description: Decided}
+        '409': {description: Case is not in review}
+  /v1/verifications/{id}/webhooks:
+    get:
+      summary: Webhook delivery attempts for a verification
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses:
+        '200': {description: OK}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}
+  schemas:
+    CreateVerification:
+      type: object
+      required: [customer]
+      properties:
+        externalRef: {type: string}
+        callbackUrl: {type: string, format: uri}
+        customer:
+          type: object
+          required: [fullName, dateOfBirth, country, documentType, documentNumber, address]
+          properties:
+            fullName: {type: string}
+            dateOfBirth: {type: string, example: '1996-04-12'}
+            country: {type: string, example: IN}
+            documentType: {type: string, enum: [passport, national_id, driving_licence]}
+            documentNumber: {type: string}
+            address:
+              type: object
+              properties:
+                line1: {type: string}
+                city: {type: string}
+                postalCode: {type: string}
+    Verification:
+      type: object
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [approved, rejected, review]}
+        riskScore: {type: integer, minimum: 0, maximum: 100}
+        checks:
+          type: array
+          items:
+            type: object
+            properties:
+              type: {type: string, enum: [identity_document, sanctions_pep, address]}
+              vendor: {type: string}
+              status: {type: string, enum: [pass, fail, needs_review, error]}
+              score: {type: integer}
+              reasons: {type: array, items: {type: string}}
+              latencyMs: {type: integer}
+              attempts: {type: integer}

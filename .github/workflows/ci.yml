@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm run build
+
+  integration:
+    needs: test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kyc
+          POSTGRES_PASSWORD: kyc
+          POSTGRES_DB: kyc
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U kyc" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://kyc:kyc@localhost:5432/kyc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - run: npm run migrate
+      - name: Smoke test against real PostgreSQL
+        run: |
+          node dist/server.js &
+          sleep 2
+          curl --fail -s -X POST localhost:3000/v1/verifications \
+            -H 'Authorization: Bearer dev-key' -H 'Idempotency-Key: ci-1' -H 'Content-Type: application/json' \
+            -d '{"customer":{"fullName":"Asha Rao","dateOfBirth":"1996-04-12","country":"IN","documentType":"passport","documentNumber":"K1234567","address":{"line1":"12 MG Road","city":"Bengaluru","postalCode":"560038"}}}'
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t kyc-orchestrator:${{ github.sha }} .
